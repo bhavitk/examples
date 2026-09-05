@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Multi-NATS Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #131a22;
+    --panel-border: #223040;
+    --text: #dbe4ec;
+    --muted: #7c8ba0;
+    --accent: #4da3ff;
+    --green: #35d68a;
+    --orange: #ffb454;
+    --purple: #c792ea;
+    --red: #ff6b6b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --panel-border: #dde3ea;
+      --text: #1c2733;
+      --muted: #64748b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .status { font-size: 13px; color: var(--muted); }
+  header .status .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--red); margin-right: 6px;
+  }
+  header .status.connected .dot { background: var(--green); }
+
+  form#add-device {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+  }
+  form#add-device input {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+    width: 140px;
+  }
+  form#add-device button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  form#add-device button:disabled { opacity: .5; cursor: default; }
+
+  main {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 16px;
+    padding: 16px 20px;
+    align-items: start;
+  }
+  @media (max-width: 800px) {
+    main { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .panel .panel-head {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--panel-border);
+    font-weight: 600;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .panel .panel-head .badge {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 400;
+  }
+  .feed {
+    padding: 8px 10px;
+    overflow-y: auto;
+    max-height: 320px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+  .feed-line {
+    padding: 3px 6px;
+    border-radius: 5px;
+    margin-bottom: 3px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .feed-line.pub { color: var(--accent); }
+  .feed-line.recv { color: var(--green); }
+  .feed-line.sent { color: var(--orange); }
+  .feed-line.other { color: var(--muted); }
+  .feed-line .ts { color: var(--muted); margin-right: 6px; }
+
+  #devices {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .device-card .panel-head .id {
+    font-family: ui-monospace, monospace;
+    background: rgba(77,163,255,.15);
+    color: var(--accent);
+    padding: 1px 8px;
+    border-radius: 10px;
+  }
+  .empty-hint {
+    color: var(--muted);
+    font-size: 13px;
+    padding: 20px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Multi-NATS Dashboard</h1>
+  <span class="status" id="conn-status"><span class="dot"></span><span id="conn-text">connecting...</span></span>
+  <form id="add-device">
+    <input id="device-id" placeholder="device id, e.g. a5" pattern="[a-z0-9-]+" required>
+    <button type="submit" id="add-btn">+ Add Device</button>
+  </form>
+</header>
+
+<main>
+  <section class="panel" id="remote-panel">
+    <div class="panel-head">
+      <span>Remote NATS (remote-client)</span>
+      <span class="badge" id="remote-count">0 events</span>
+    </div>
+    <div class="feed" id="remote-feed"></div>
+  </section>
+
+  <section id="devices"></section>
+</main>
+
+<script>
+const remoteFeed = document.getElementById('remote-feed');
+const remoteCount = document.getElementById('remote-count');
+const devicesEl = document.getElementById('devices');
+const connText = document.getElementById('conn-text');
+const connStatus = document.getElementById('conn-status');
+
+let remoteEvents = 0;
+const deviceCards = new Map(); // id -> {feed, count, el}
+const MAX_LINES = 200;
+
+function classify(line, role) {
+  if (role === 'remote') {
+    if (line.includes('sent subject=')) return 'sent';
+    if (line.includes('received subject=')) return 'recv';
+    return 'other';
+  }
+  if (line.includes('published subject=')) return 'pub';
+  if (line.includes('received incoming')) return 'recv';
+  return 'other';
+}
+
+function fmtTs(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString(undefined, {hour12:false}) + '.' + String(d.getMilliseconds()).padStart(3,'0');
+}
+
+function appendLine(feed, cls, ts, text) {
+  const div = document.createElement('div');
+  div.className = 'feed-line ' + cls;
+  const tsSpan = document.createElement('span');
+  tsSpan.className = 'ts';
+  tsSpan.textContent = fmtTs(ts);
+  div.appendChild(tsSpan);
+  div.appendChild(document.createTextNode(text));
+  const atBottom = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 10;
+  feed.appendChild(div);
+  while (feed.childElementCount > MAX_LINES) feed.removeChild(feed.firstChild);
+  if (atBottom) feed.scrollTop = feed.scrollHeight;
+}
+
+function ensureDeviceCard(id) {
+  if (deviceCards.has(id)) return deviceCards.get(id);
+  const hint = document.querySelector('.empty-hint');
+  if (hint) hint.remove();
+
+  const card = document.createElement('section');
+  card.className = 'panel device-card';
+  card.innerHTML = `
+    <div class="panel-head">
+      <span>Device <span class="id">${id}</span></span>
+      <span class="badge" data-count>0 events</span>
+    </div>
+    <div class="feed" data-feed></div>
+  `;
+  devicesEl.appendChild(card);
+  const state = { feed: card.querySelector('[data-feed]'), countEl: card.querySelector('[data-count]'), count: 0 };
+  deviceCards.set(id, state);
+  return state;
+}
+
+function handleEvent(ev) {
+  if (ev.type === 'device-list') {
+    (ev.devices || []).forEach(ensureDeviceCard);
+    if (devicesEl.children.length === 0) {
+      devicesEl.innerHTML = '<div class="empty-hint">No devices yet. Add one above.</div>';
+    }
+    return;
+  }
+  if (ev.type !== 'log') return;
+
+  if (ev.role === 'remote') {
+    remoteEvents++;
+    remoteCount.textContent = remoteEvents + ' events';
+    appendLine(remoteFeed, classify(ev.line, 'remote'), ev.ts, ev.line);
+  } else if (ev.role === 'device') {
+    const state = ensureDeviceCard(ev.deviceId);
+    state.count++;
+    state.countEl.textContent = state.count + ' events';
+    appendLine(state.feed, classify(ev.line, 'device'), ev.ts, ev.line);
+  }
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(proto + '://' + location.host + '/ws');
+  ws.onopen = () => {
+    connStatus.classList.add('connected');
+    connText.textContent = 'connected';
+  };
+  ws.onclose = () => {
+    connStatus.classList.remove('connected');
+    connText.textContent = 'disconnected - retrying...';
+    setTimeout(connect, 1500);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (msg) => {
+    try { handleEvent(JSON.parse(msg.data)); } catch (e) { console.error(e); }
+  };
+}
+connect();
+
+document.getElementById('add-device').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('device-id');
+  const btn = document.getElementById('add-btn');
+  const id = input.value.trim();
+  if (!id) return;
+  btn.disabled = true;
+  btn.textContent = 'Provisioning...';
+  try {
+    const res = await fetch('/api/devices', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    ensureDeviceCard(id);
+    input.value = '';
+  } catch (err) {
+    alert('Failed to provision device: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '+ Add Device';
+  }
+});
+</script>
+</body>
+</html>

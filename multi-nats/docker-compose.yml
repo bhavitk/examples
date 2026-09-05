@@ -1,0 +1,47 @@
+services:
+  nats-remote:
+    image: nats:2.10-alpine
+    container_name: nats-remote
+    command: ["-c", "/etc/nats/remote.conf"]
+    volumes:
+      - ./nats-config/remote.conf:/etc/nats/remote.conf:ro
+      - ./nats-config/resolver.conf:/etc/nats/resolver.conf:ro
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  remote-client:
+    build: ./app
+    container_name: remote-client
+    environment:
+      ROLE: remote
+      NATS_URL: nats://nats-remote:4222
+      NATS_CREDS: /etc/nats/remote.creds
+    volumes:
+      - ./nsc-data/creds/remote.creds:/etc/nats/remote.creds:ro
+    depends_on:
+      - nats-remote
+
+  dashboard:
+    build: ./dashboard
+    container_name: dashboard
+    ports:
+      - "8080:8080"
+    volumes:
+      # Bind-mounted at the SAME absolute path as on the host: dashboard talks
+      # to the host docker daemon over docker.sock (docker-outside-of-docker),
+      # so any bind-mount paths it constructs (e.g. via `docker compose up`
+      # for a new device) must resolve to real host paths, not container-only
+      # ones. Requires running `docker compose` from this project directory.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PWD}:${PWD}
+    working_dir: ${PWD}
+    environment:
+      PROJECT_DIR: ${PWD}
+    depends_on:
+      - nats-remote
+      - remote-client
+
+# Devices (nats-a1, nats-a2, nats-a3, ...) are provisioned dynamically via
+# scripts/provision-device.sh, which generates docker-compose.<id>.yml
+# override files. nats-remote above is never edited or restarted to add one.
