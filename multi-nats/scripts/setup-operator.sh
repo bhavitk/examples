@@ -24,6 +24,11 @@ docker run --rm \
     nsc add account $D DEVICES
     nsc edit account $D DEVICES --sk generate
     nsc generate config $D --mem-resolver --sys-account SYS --config-file /work/nats-config/resolver.conf --force
+    nsc add user -a DEVICES $D remote \
+      --allow-pub "device.*.incoming.data" \
+      --allow-sub "device.*.outgoing.data"
+    mkdir -p /work/nsc-data/creds
+    nsc generate creds -a DEVICES $D -n remote -o /work/nsc-data/creds/remote.creds
     echo "--- operator/account setup complete ---"
     nsc list accounts $D
   '
