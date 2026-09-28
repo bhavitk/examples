@@ -1,2 +1,5 @@
 nsc-data/*
 !nsc-data/.gitignore
+nats-config/resolver.conf
+nats-config/device-*.conf
+docker-compose.*.yml
