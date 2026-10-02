@@ -68,19 +68,42 @@ const hints = {
   disconnected: 'Registered, but the connection to the remote is down.',
 };
 
-async function post(path, body) {
-  const r = await fetch(path, { method: 'POST', headers: hdr, body: JSON.stringify(body || {}) });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) { $('error').hidden = false; $('error').textContent = j.error || ('HTTP ' + r.status); }
-  return j;
-}
-
 function btn(label, onclick, primary, disabled) {
   const b = document.createElement('button');
   b.textContent = label; b.onclick = onclick; b.disabled = !!disabled;
   if (primary) b.className = 'primary';
   return b;
 }
+
+// Opens the Keycloak login in a popup; resolves once the popup reports back
+// (it closes itself), rejects if the user closes it first.
+function loginPopup() {
+  return new Promise((resolve, reject) => {
+    const w = window.open('/auth/login', 'kc-login', 'width=480,height=680');
+    if (!w) return reject(new Error('Popup blocked - allow popups for this page and try again.'));
+    const done = (ok, err) => { window.removeEventListener('message', onMsg); clearInterval(t); ok ? resolve() : reject(err); };
+    const onMsg = e => { if (e.origin === location.origin && e.data && e.data.type === 'login-complete') done(true); };
+    const t = setInterval(() => { if (w.closed) done(false, new Error('Login window closed before signing in.')); }, 500);
+    window.addEventListener('message', onMsg);
+  });
+}
+
+let clientErr = '';
+function showError(msg) { clientErr = msg; $('error').hidden = !msg; $('error').textContent = msg; }
+
+// Runs an action that needs a Keycloak token: log in via popup first if we
+// have none (or the session expired and the server answers 401), then retry.
+async function withLogin(action) {
+  try {
+    if (!last || !last.logged_in) await loginPopup();
+    let r = await action();
+    if (r.status === 401) { await loginPopup(); r = await action(); }
+    if (!r.ok) showError((await r.json().catch(() => ({}))).error || ('HTTP ' + r.status));
+  } catch (e) { showError(e.message); }
+  tick();
+}
+
+const call = (path, body) => () => fetch(path, { method: 'POST', headers: hdr, body: JSON.stringify(body || {}) });
 
 function render(s) {
   last = s;
@@ -90,7 +113,8 @@ function render(s) {
   $('state').textContent = s.state;
   $('state').className = 'badge ' + (busy ? 'busy' : s.state);
   $('hint').textContent = busy ? 'Working…' : (hints[s.state] || '');
-  $('error').hidden = !s.error; $('error').textContent = s.error || '';
+  const msg = s.error || clientErr;
+  $('error').hidden = !msg; $('error').textContent = msg;
   $('natsup').textContent = s.nats_up ? 'up' : 'down / restarting';
   $('published').textContent = s.published + ' messages';
   $('lastpub').textContent = s.last_published || '–';
@@ -100,19 +124,17 @@ function render(s) {
 
   // Keep the name field (and focus) stable across polls.
   const actions = $('actions');
-  if (actions.dataset.key === s.state + s.logged_in + s.registered) return;
-  actions.dataset.key = s.state + s.logged_in + s.registered;
+  if (actions.dataset.key === s.state + s.registered) return;
+  actions.dataset.key = s.state + s.registered;
   actions.replaceChildren();
   if (busy) return;
-  if (!s.logged_in) actions.append(btn('Log in with Keycloak', () => location = '/auth/login', !s.registered));
-  else actions.append(btn('Log out', async () => { const j = await post('/auth/logout'); if (j.redirect) location = j.redirect; }));
   if (!s.registered) {
     const inp = document.createElement('input'); inp.value = nameDraft ?? s.name; inp.maxLength = 64; inp.placeholder = 'Friendly name';
-    inp.oninput = () => nameDraft = inp.value; inp.id = 'regname';
-    actions.append(inp, btn('Register device', () => post('/api/register', { name: inp.value }), true, !s.logged_in));
+    inp.oninput = () => nameDraft = inp.value;
+    actions.append(inp, btn('Register device', () => { showError(''); withLogin(call('/api/register', { name: inp.value })); }, true));
   } else {
-    actions.append(btn('Re-register (rotate credentials)', () => post('/api/register', { name: s.name }), false, !s.logged_in));
-    actions.append(btn('Unregister', () => confirm('Revoke this device on the remote and disconnect?') && post('/api/unregister'), false, !s.logged_in));
+    actions.append(btn('Re-register (rotate credentials)', () => withLogin(call('/api/register', { name: s.name }))));
+    actions.append(btn('Unregister', () => confirm('Revoke this device on the remote and disconnect?') && withLogin(call('/api/unregister'))));
   }
 }
 

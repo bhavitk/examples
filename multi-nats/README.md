@@ -55,8 +55,9 @@ scripts/local-up.sh L2 8081      # more sites: use a free port from 8080-8083
 (`8080`-`8083` are the redirect URIs allowed by `keycloak/devices-realm.json`.)
 
 Open the UI (http://localhost:8080): it shows `unregistered` and the data it is
-publishing locally. **Log in with Keycloak**, then **Register device**. The
-backend gets creds from the API, writes `leaf.conf`, restarts `nats-local`, and
+publishing locally. Click **Register device**: a popup opens the Keycloak login
+and closes itself once you've signed in, then the UI registers the device with
+the token it got (allow popups for the page). The backend gets creds from the API, writes `leaf.conf`, restarts `nats-local`, and
 waits for the leafnode to connect (rolling back if it doesn't within 30s). The
 state becomes `connected`; `docker logs -f remote-client` shows the data.
 

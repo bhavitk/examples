@@ -12,7 +12,6 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +30,6 @@ type config struct {
 	natsURL     string
 	monitorURL  string
 	apiURL      string
-	logoutURL   string
 	publicURL   string
 	oauth       *oauth2.Config
 	publishEach time.Duration
@@ -70,7 +68,6 @@ func runServe(dataDir string) {
 		monitorURL:  mustEnv("NATS_MONITOR_URL"),
 		apiURL:      mustEnv("API_URL"),
 		publicURL:   mustEnv("PUBLIC_URL"),
-		logoutURL:   mustEnv("OIDC_LOGOUT_URL"),
 		publishEach: 3 * time.Second,
 		oauth: &oauth2.Config{
 			ClientID: env("OIDC_CLIENT_ID", "local-device"),
@@ -106,7 +103,6 @@ func runServe(dataDir string) {
 	mux.HandleFunc("GET /api/status", b.handleStatus)
 	mux.HandleFunc("GET /auth/login", b.handleLogin)
 	mux.HandleFunc("GET /auth/callback", b.handleCallback)
-	mux.HandleFunc("POST /auth/logout", b.ui(b.handleLogout))
 	mux.HandleFunc("POST /api/register", b.ui(b.handleRegister))
 	mux.HandleFunc("POST /api/unregister", b.ui(b.handleUnregister))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
@@ -300,7 +296,14 @@ func (b *backend) handleCallback(w http.ResponseWriter, r *http.Request) {
 	b.user = usernameFromToken(tok.AccessToken)
 	b.lastErr = ""
 	b.mu.Unlock()
-	http.Redirect(w, r, "/", http.StatusFound)
+	// The login ran in a popup opened by the UI: tell the opener and close.
+	// (Without an opener, e.g. popup blocked, fall back to the main page.)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	io.WriteString(w, `<!doctype html><title>Signed in</title><p>Signed in. You can close this window.</p>
+<script>
+if (window.opener) { window.opener.postMessage({ type: "login-complete" }, location.origin); window.close(); }
+else { location.replace("/"); }
+</script>`)
 }
 
 // usernameFromToken reads preferred_username for display only; the token is
@@ -319,17 +322,6 @@ func usernameFromToken(tok string) string {
 	}
 	json.Unmarshal(raw, &c)
 	return c.U
-}
-
-func (b *backend) handleLogout(w http.ResponseWriter, r *http.Request) {
-	b.mu.Lock()
-	b.token, b.user = nil, ""
-	b.mu.Unlock()
-	u := b.cfg.logoutURL + "?" + url.Values{
-		"client_id":                {b.cfg.oauth.ClientID},
-		"post_logout_redirect_uri": {strings.TrimRight(b.cfg.publicURL, "/") + "/"},
-	}.Encode()
-	jsonOut(w, 200, map[string]string{"redirect": u})
 }
 
 // accessToken returns a valid access token (refreshing if needed).

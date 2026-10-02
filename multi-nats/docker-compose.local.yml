@@ -44,7 +44,6 @@ services:
       OIDC_CLIENT_ID: local-device
       OIDC_AUTH_URL: http://localhost:9090/realms/devices/protocol/openid-connect/auth
       OIDC_TOKEN_URL: http://keycloak:8080/realms/devices/protocol/openid-connect/token
-      OIDC_LOGOUT_URL: http://localhost:9090/realms/devices/protocol/openid-connect/logout
     volumes:
       - ${LOCAL_DATA:-./local-data/l1}:/data
     ports:
