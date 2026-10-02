@@ -6,6 +6,9 @@ services:
     volumes:
       - ./nats-config/remote.conf:/etc/nats/remote.conf:ro
       - ./nats-config/resolver.conf:/etc/nats/resolver.conf:ro
+      # full resolver stores account JWTs here (survives restarts, so
+      # revocations pushed at runtime are not lost)
+      - nats-remote-jwt:/data/jwt
     ports:
       - "4222:4222"
       - "8222:8222"
@@ -21,3 +24,43 @@ services:
       - ./nsc-data/creds/remote.creds:/etc/nats/remote.creds:ro
     depends_on:
       - nats-remote
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      # Browser-facing URL (what ends up in token `iss`); the backchannel
+      # (token/jwks endpoints used container-to-container) stays dynamic.
+      KC_HOSTNAME: http://localhost:9090
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./keycloak/devices-realm.json:/opt/keycloak/data/import/devices-realm.json:ro
+    ports:
+      - "9090:8080"
+
+  registration-api:
+    build: ./registration-api
+    container_name: registration-api
+    environment:
+      OIDC_ISSUER: http://localhost:9090/realms/devices
+      OIDC_JWKS_URL: http://keycloak:8080/realms/devices/protocol/openid-connect/certs
+      OIDC_CLIENT_ID: local-device
+      LEAF_URL: leaf://nats-remote:7422
+      NATS_URL: nats://nats-remote:4222
+    volumes:
+      - ./nsc-data/store:/nsc-data/store
+      - ./nsc-data/creds/sys.creds:/nsc-data/creds/sys.creds:ro
+      - registration-db:/data
+    ports:
+      - "8090:8090"
+    depends_on:
+      - nats-remote
+      - keycloak
+
+volumes:
+  nats-remote-jwt:
+  registration-db:

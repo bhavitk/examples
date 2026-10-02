@@ -1,0 +1,61 @@
+# One local site (a device): its own NATS + backend/UI. Run one project per site:
+#
+#   scripts/local-up.sh L1 8080
+#   scripts/local-up.sh L2 8081
+#
+# It starts UNREGISTERED (no leafnode). Registering through the UI makes the
+# backend write nats/leaf.conf and restart nats-local so it joins nats-remote.
+#
+# nats-remote/keycloak/registration-api come from docker-compose.yml, which
+# must already be up (shared network multi-nats_default).
+services:
+  local-init:
+    build: ./local-backend
+    command: ["init"]
+    environment:
+      LOCAL_NAME: ${LOCAL_NAME:-L1}
+    volumes:
+      - ${LOCAL_DATA:-./local-data/l1}:/data
+    networks: [local]
+
+  nats-local:
+    image: nats:2.10-alpine
+    container_name: nats-${LOCAL_NAME:-L1}
+    # run.sh supervises nats-server and restarts it when local-backend asks
+    entrypoint: ["/bin/sh", "/nats/run.sh"]
+    restart: unless-stopped
+    volumes:
+      - ${LOCAL_DATA:-./local-data/l1}/nats:/nats
+    depends_on:
+      local-init:
+        condition: service_completed_successfully
+    networks: [local, remote]
+
+  local-backend:
+    build: ./local-backend
+    container_name: backend-${LOCAL_NAME:-L1}
+    command: ["serve"]
+    restart: unless-stopped
+    environment:
+      NATS_URL: nats://nats-${LOCAL_NAME:-L1}:4222
+      NATS_MONITOR_URL: http://nats-${LOCAL_NAME:-L1}:8222
+      API_URL: http://registration-api:8090
+      PUBLIC_URL: http://localhost:${UI_PORT:-8080}
+      OIDC_CLIENT_ID: local-device
+      OIDC_AUTH_URL: http://localhost:9090/realms/devices/protocol/openid-connect/auth
+      OIDC_TOKEN_URL: http://keycloak:8080/realms/devices/protocol/openid-connect/token
+      OIDC_LOGOUT_URL: http://localhost:9090/realms/devices/protocol/openid-connect/logout
+    volumes:
+      - ${LOCAL_DATA:-./local-data/l1}:/data
+    ports:
+      - "${UI_PORT:-8080}:8080"
+    depends_on:
+      local-init:
+        condition: service_completed_successfully
+    networks: [local, remote]
+
+networks:
+  local: {}
+  remote:
+    name: multi-nats_default
+    external: true

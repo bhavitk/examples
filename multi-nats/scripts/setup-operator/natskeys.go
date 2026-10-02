@@ -2,7 +2,7 @@
 // file directly with github.com/nats-io/jwt/v2 and github.com/nats-io/nkeys,
 // writing key material into the same nsc "all-dirs" store layout the nsc CLI
 // itself uses (keys/<X>/<XX>/<pubkey>.nk, <operator>/<operator>.jwt,
-// <operator>/accounts/<name>/<name>.jwt) so scripts/provision-device stays
+// <operator>/accounts/<name>/<name>.jwt) so registration-api stays
 // able to read it. No nsc CLI or Docker required.
 package main
 

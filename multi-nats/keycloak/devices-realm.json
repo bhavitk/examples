@@ -1,0 +1,41 @@
+{
+  "realm": "devices",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "local-device",
+      "name": "Local device UI",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "http://localhost:8080/auth/callback",
+        "http://localhost:8081/auth/callback",
+        "http://localhost:8082/auth/callback",
+        "http://localhost:8083/auth/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8080/*##http://localhost:8081/*##http://localhost:8082/*##http://localhost:8083/*"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "testuser",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "testuser@example.com",
+      "firstName": "Test",
+      "lastName": "User",
+      "credentials": [{ "type": "password", "value": "testpass", "temporary": false }]
+    }
+  ]
+}

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local Device</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#667085; --line:#e4e7ec; --accent:#2457d6;
+          --ok:#12805c; --warn:#b54708; --bad:#b42318; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151a; --card:#1a1f26; --fg:#e8eaed; --muted:#98a2b3; --line:#2b323c; --accent:#7ba3ff;
+            --ok:#4cc38a; --warn:#f5a45c; --bad:#ff7a70; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; word-break: break-all; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 16px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:13px; font-weight:600; border:1px solid currentColor; }
+  .connected { color: var(--ok); } .unregistered { color: var(--muted); }
+  .disconnected, .error { color: var(--bad); } .busy { color: var(--warn); }
+  button { font:inherit; padding:7px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  input { font:inherit; padding:7px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); min-width:0; }
+  dl { display:grid; grid-template-columns: max-content 1fr; gap:4px 16px; margin:0; }
+  dt { color: var(--muted); } dd { margin:0; word-break: break-all; }
+  pre { margin:8px 0 0; font-size:12px; white-space:pre-wrap; word-break:break-all; }
+  .err { color: var(--bad); margin-top: 8px; }
+  h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Local device <span id="name"></span></h1>
+  <div class="sub" id="devid"></div>
+
+  <div class="card">
+    <div class="row"><span id="state" class="badge">…</span><span id="hint" class="sub"></span></div>
+    <div class="err" id="error" hidden></div>
+    <div class="row" style="margin-top:12px" id="actions"></div>
+  </div>
+
+  <div class="card">
+    <h2>Local data</h2>
+    <dl>
+      <dt>Local NATS</dt><dd id="natsup"></dd>
+      <dt>Published</dt><dd id="published"></dd>
+      <dt>Last publish</dt><dd id="lastpub"></dd>
+      <dt>Signed in as</dt><dd id="user"></dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Received from remote</h2>
+    <div id="recent" class="sub">nothing yet</div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const hdr = { 'X-Requested-With': 'ui', 'Content-Type': 'application/json' };
+let last = null, nameDraft = null;
+
+const hints = {
+  unregistered: 'Data is published locally but not delivered anywhere yet.',
+  connected: 'Registered. Data is flowing to the remote.',
+  disconnected: 'Registered, but the connection to the remote is down.',
+};
+
+async function post(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: hdr, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { $('error').hidden = false; $('error').textContent = j.error || ('HTTP ' + r.status); }
+  return j;
+}
+
+function btn(label, onclick, primary, disabled) {
+  const b = document.createElement('button');
+  b.textContent = label; b.onclick = onclick; b.disabled = !!disabled;
+  if (primary) b.className = 'primary';
+  return b;
+}
+
+function render(s) {
+  last = s;
+  const busy = !['unregistered', 'connected', 'disconnected'].includes(s.state);
+  $('name').textContent = '· ' + s.name;
+  $('devid').textContent = 'device id ' + s.device_id;
+  $('state').textContent = s.state;
+  $('state').className = 'badge ' + (busy ? 'busy' : s.state);
+  $('hint').textContent = busy ? 'Working…' : (hints[s.state] || '');
+  $('error').hidden = !s.error; $('error').textContent = s.error || '';
+  $('natsup').textContent = s.nats_up ? 'up' : 'down / restarting';
+  $('published').textContent = s.published + ' messages';
+  $('lastpub').textContent = s.last_published || '–';
+  $('user').textContent = s.logged_in ? s.user : 'not signed in';
+  $('recent').textContent = s.recent && s.recent.length ? '' : 'nothing yet';
+  (s.recent || []).forEach(m => { const d = document.createElement('div'); d.textContent = m.at + '  ' + m.payload; $('recent').appendChild(d); });
+
+  // Keep the name field (and focus) stable across polls.
+  const actions = $('actions');
+  if (actions.dataset.key === s.state + s.logged_in + s.registered) return;
+  actions.dataset.key = s.state + s.logged_in + s.registered;
+  actions.replaceChildren();
+  if (busy) return;
+  if (!s.logged_in) actions.append(btn('Log in with Keycloak', () => location = '/auth/login', !s.registered));
+  else actions.append(btn('Log out', async () => { const j = await post('/auth/logout'); if (j.redirect) location = j.redirect; }));
+  if (!s.registered) {
+    const inp = document.createElement('input'); inp.value = nameDraft ?? s.name; inp.maxLength = 64; inp.placeholder = 'Friendly name';
+    inp.oninput = () => nameDraft = inp.value; inp.id = 'regname';
+    actions.append(inp, btn('Register device', () => post('/api/register', { name: inp.value }), true, !s.logged_in));
+  } else {
+    actions.append(btn('Re-register (rotate credentials)', () => post('/api/register', { name: s.name }), false, !s.logged_in));
+    actions.append(btn('Unregister', () => confirm('Revoke this device on the remote and disconnect?') && post('/api/unregister'), false, !s.logged_in));
+  }
+}
+
+async function tick() {
+  try { render(await (await fetch('/api/status')).json()); } catch (e) { $('state').textContent = 'backend unreachable'; }
+}
+tick(); setInterval(tick, 1500);
+</script>
+</body>
+</html>

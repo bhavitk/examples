@@ -1,14 +1,14 @@
-// setup-operator is a Go re-implementation of scripts/setup-operator.sh.
+// setup-operator bootstraps the NATS trust chain.
 //
 // One-time setup: creates the Operator, SYS account, and DEVICES account,
-// then writes nats-config/resolver.conf (mem-resolver preload) for
+// then writes nats-config/resolver.conf (full-resolver config) for
 // nats-remote, plus a "remote" user under DEVICES so remote-client can
 // connect. All key generation and JWT signing happens directly via
 // github.com/nats-io/jwt/v2 and github.com/nats-io/nkeys (see natskeys.go) -
 // no nsc CLI or Docker required.
 //
 // This is the ONLY step that ever touches nats-remote's config. After this,
-// new devices are provisioned with scripts/provision-device and nats-remote
+// new devices register through registration-api and nats-remote
 // is never restarted again.
 //
 // Usage: go run ./scripts/setup-operator
@@ -28,8 +28,7 @@ import (
 const operatorName = "multinats"
 
 // Setup holds everything needed to bootstrap the operator/account trust
-// chain and exposes each step of the process as its own method, mirroring
-// the stages of setup-operator.sh.
+// chain and exposes each step of the process as its own method.
 type Setup struct {
 	ProjectDir string
 
@@ -55,8 +54,7 @@ func main() {
 	}
 }
 
-// Run executes every setup step in order, matching the sequence in
-// setup-operator.sh.
+// Run executes every setup step in order.
 func (s *Setup) Run() error {
 	if err := s.EnsureDirs(); err != nil {
 		return fmt.Errorf("ensure dirs: %w", err)
@@ -92,6 +90,9 @@ func (s *Setup) Run() error {
 	}
 	if err := s.ProvisionRemoteUser(); err != nil {
 		return fmt.Errorf("provision remote user: %w", err)
+	}
+	if err := s.ProvisionSysUser(); err != nil {
+		return fmt.Errorf("provision sys user: %w", err)
 	}
 
 	fmt.Println("--- operator/account setup complete ---")
@@ -184,7 +185,7 @@ func (s *Setup) BuildAccountJWT(name string, accountKP nkeys.KeyPair, accountPub
 }
 
 // StoreKeys writes every generated keypair's seed into the nsc store's key
-// tree so scripts/provision-device can find it later.
+// tree so registration-api can find it later.
 func (s *Setup) StoreKeys() error {
 	for _, kp := range []nkeys.KeyPair{s.operatorKP, s.signingKP, s.sysKP, s.devicesKP} {
 		if err := storeSeed(s.storeDir(), kp); err != nil {
@@ -210,7 +211,16 @@ operator: %[2]s
 
 system_account: %[3]s
 
-resolver: MEMORY
+# Full resolver: account JWTs live in dir and are updated at runtime by
+# pushing to $SYS.REQ.CLAIMS.UPDATE (e.g. device revocation), so nats-remote
+# never needs a restart for account changes. dir must be a persistent volume.
+resolver: {
+  type: full
+  dir: "/data/jwt"
+  allow_delete: false
+  interval: "2m"
+  timeout: "5s"
+}
 
 resolver_preload: {
   // Account "SYS"
@@ -248,6 +258,17 @@ func (s *Setup) ProvisionRemoteUser() error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(credsDir, "remote.creds"), []byte(creds), 0o600)
+}
+
+// ProvisionSysUser mints an unrestricted "sys" user under the SYS account.
+// registration-api uses it to push updated DEVICES account JWTs (revocations)
+// to nats-remote's full resolver.
+func (s *Setup) ProvisionSysUser() error {
+	creds, err := mintUserCreds(s.sysKP, "sys", nil, nil)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(s.ProjectDir, "nsc-data", "creds", "sys.creds"), []byte(creds), 0o600)
 }
 
 func (s *Setup) storeDir() string {

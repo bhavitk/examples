@@ -114,6 +114,8 @@ Ans: Browser based login
 Ans: This is also POC with phase 2, so for now we are keeping keycloak as login provider only. We can improve this later.
 4. Reload mechanism in Docker: docker socket, shared PID namespace, or sidecar watcher?
 Ans: nats reload via system subject? backend connect with sys account/user and reload using system subject!
+
+Result (tested on nats 2.10.29): a system-subject reload **cannot add or change a leafnode remote** ("config reload not supported for LeafNode") and there is no system-subject shutdown/restart. Decision: restart `nats-local` instead. `nats-local` runs under a small supervisor script that restarts `nats-server` when the backend writes a marker file, so no sys user/account and no docker socket are needed. The backend publisher reconnects forever.
 5. Do we move to the full resolver now (needed for revocation without restarting `nats-remote`)?
 Ans: Yes
 6. Creds lifetime and renewal policy.
@@ -127,3 +129,7 @@ Ans: No expiration
 4. Keycloak in compose + real JWT validation in the API + login flow in the local backend/UI.
 5. Full resolver + deregister/revoke + creds rotation.
 6. TLS, observability, docs (update the README, which still describes the Phase 1 flow).
+
+## Implementation status (branch `phase2`)
+
+Build steps 1-5 are implemented (UUID ids, registration API + registry, local backend with restart/rollback, Keycloak login, full resolver + unregister/revoke/rotate). Still open: TLS, observability beyond logs, automated integration tests. See `README.md` for how to run it.
